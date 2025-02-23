@@ -12,6 +12,7 @@
   "description": "A Discord bot to update channel name with countdown to next Solo Leveling episode",
   "dependencies": {
     "discord.js": "^14.18.0",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "moment-timezone": "^0.5.47"
   }
 }
