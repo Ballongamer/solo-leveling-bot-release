@@ -5,36 +5,42 @@ const moment = require('moment-timezone');
 const client = new Client({ 
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildVoiceStates // ADDED FOR VOICE CHANNEL ACCESS
+    GatewayIntentBits.GuildVoiceStates
   ] 
 });
 
-const CHANNEL_ID = '1342989356368924713';
+const CHANNEL_ID = '1342989356368924713'; // Verify this is a VOICE channel
 const EPISODE_NUMBER = 9;
 const TARGET_TIMEZONE = 'Asia/Tokyo';
 
-// IMPROVED DATE CALCULATION
 function getNextRelease() {
-  const now = moment().tz(TARGET_TIMEZONE);
   const firstEpisode = moment.tz('2025-03-02 00:00', 'YYYY-MM-DD HH:mm', TARGET_TIMEZONE);
+  const now = moment().tz(TARGET_TIMEZONE);
   
-  if (now.isSameOrAfter(firstEpisode)) {
-    // Calculate next Sunday after last episode
-    return firstEpisode.add(
-      Math.ceil(now.diff(firstEpisode, 'weeks', true)), 
-      'weeks'
-    ).day(0).hour(0).minute(0).second(0);
+  // If current time is before first episode, use first episode date
+  if (now.isBefore(firstEpisode)) {
+    return firstEpisode;
   }
-  return firstEpisode;
+  
+  // Calculate next Sunday at 00:00 JST
+  return moment.tz(TARGET_TIMEZONE)
+    .day(7) // Next Sunday (0=Sunday, 7=next Sunday)
+    .hour(0)
+    .minute(0)
+    .second(0);
 }
 
 async function updateChannel() {
   try {
     const channel = await client.channels.fetch(CHANNEL_ID);
     
-    // VOICE CHANNEL VERIFICATION
-    if (!channel?.isVoiceBased()) {
-      console.error('Target channel is not a voice channel!');
+    // Verify channel exists and is voice
+    if (!channel) {
+      console.error('Channel not found!');
+      return;
+    }
+    if (!channel.isVoiceBased()) {
+      console.error('ERROR: Channel must be a VOICE channel!');
       return;
     }
 
@@ -42,12 +48,11 @@ async function updateChannel() {
     const now = moment().tz(TARGET_TIMEZONE);
     const duration = moment.duration(target.diff(now));
 
-    // DEBUG LOGS
-    console.log('Current JST:', now.format());
-    console.log('Next episode:', target.format());
+    console.log('Current JST:', now.format('YYYY-MM-DD HH:mm'));
+    console.log('Next Episode:', target.format('YYYY-MM-DD HH:mm'));
     
     if (duration.asMilliseconds() <= 0) {
-      await channel.setName('🕛 Episode Available Now!');
+      await channel.setName('🕛 Episode Released!');
     } else {
       await channel.setName(
         `⌛ EP${EPISODE_NUMBER} - ${Math.floor(duration.asDays())}d ` +
@@ -55,15 +60,21 @@ async function updateChannel() {
       );
     }
   } catch (error) {
-    console.error('Update error:', error);
+    console.error('Critical error:', error);
   }
 }
 
-// SAFER INTERVAL (5 MINUTES TO AVOID RATE LIMITS)
+// Restored to 1-minute interval with rate limit protection
+let isUpdating = false;
 client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}!`);
   updateChannel();
-  setInterval(updateChannel, 300000); // 5-minute intervals
+  setInterval(() => {
+    if (!isUpdating) {
+      isUpdating = true;
+      updateChannel().finally(() => isUpdating = false);
+    }
+  }, 60000); // 1 minute
 });
 
 client.login(process.env.TOKEN);
