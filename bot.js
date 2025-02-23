@@ -1,7 +1,6 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits } = require('discord.js');
 const moment = require('moment-timezone');
-const schedule = require('node-schedule');
 
 const client = new Client({ 
   intents: [
@@ -13,74 +12,72 @@ const client = new Client({
 const CHANNEL_ID = '1343260278388691095';
 const EPISODE_NUMBER = 9;
 const TARGET_TIMEZONE = 'Asia/Tokyo';
+const UPDATE_INTERVAL = 300000; // 5 minutes in milliseconds
+
+let lastUpdate = 0;
 
 function getNextRelease() {
   const firstEpisode = moment.tz('2025-03-02 00:00', 'YYYY-MM-DD HH:mm', TARGET_TIMEZONE);
   const now = moment().tz(TARGET_TIMEZONE);
   
-  if (now.isBefore(firstEpisode)) {
-    return firstEpisode;
-  }
-  
-  // Next Sunday at midnight JST
-  return moment.tz(TARGET_TIMEZONE)
-    .startOf('week')
-    .add(1, 'week')
-    .hour(0)
-    .minute(0)
-    .second(0);
+  return now.isBefore(firstEpisode) 
+    ? firstEpisode 
+    : firstEpisode.add(
+        Math.ceil(now.diff(firstEpisode, 'weeks', true)), 
+        'weeks'
+      ).day(0).hour(0).minute(0).second(0);
 }
 
-async function updateChannel() {
+async function safeUpdate() {
   try {
+    const now = Date.now();
+    
+    // Enforce 5-minute cooldown
+    if (now - lastUpdate < UPDATE_INTERVAL) {
+      console.log('Skipping update - cooldown active');
+      return;
+    }
+
     const channel = await client.channels.fetch(CHANNEL_ID);
     if (!channel?.isVoiceBased()) return;
 
     const target = getNextRelease();
-    const now = moment().tz(TARGET_TIMEZONE);
-    const duration = moment.duration(target.diff(now));
-
-    let name;
-    if (duration.asMilliseconds() <= 0) {
-      name = '🕛 Episode Released!';
-    } else {
-      name = `⌛ EP${EPISODE_NUMBER} - ${Math.floor(duration.asDays())}d ` +
-             `${duration.hours()}h ${duration.minutes()}m`;
-    }
-
-    await channel.setName(name);
+    const duration = moment.duration(target.diff(moment().tz(TARGET_TIMEZONE)));
     
-    // Schedule next update exactly when needed
-    const nextUpdateTime = new Date(now.add(1, 'minute').toDate());
-    schedule.scheduleJob(nextUpdateTime, () => {
-      updateChannel();
-      scheduleNextDailyCheck();
-    });
+    await channel.setName(
+      duration.asMilliseconds() <= 0
+        ? '🕛 Episode Released!'
+        : `⌛ EP${EPISODE_NUMBER} - ${Math.floor(duration.asDays())}d ` +
+          `${duration.hours()}h ${duration.minutes()}m`
+    );
+
+    lastUpdate = Date.now();
+    console.log('Successfully updated at:', new Date().toISOString());
 
   } catch (error) {
-    console.error('Update error:', error);
-    // Retry in 5 minutes on error
-    setTimeout(updateChannel, 300000);
+    console.error('Update error:', error.message);
+    
+    // If rate limited, wait full cooldown
+    if (error.code === 429) {
+      lastUpdate = Date.now() + error.timeout;
+    }
   }
 }
 
-// Daily alignment check at 00:00 JST
-function scheduleNextDailyCheck() {
-  const checkTime = moment.tz(TARGET_TIMEZONE)
-    .add(1, 'day')
-    .startOf('day')
-    .toDate();
+// Precise 5-minute interval with drift protection
+function startInterval() {
+  const now = Date.now();
+  const next = Math.ceil(now / UPDATE_INTERVAL) * UPDATE_INTERVAL;
   
-  schedule.scheduleJob(checkTime, () => {
-    updateChannel();
-    scheduleNextDailyCheck();
-  });
+  setTimeout(() => {
+    safeUpdate();
+    setInterval(safeUpdate, UPDATE_INTERVAL);
+  }, next - now);
 }
 
 client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}!`);
-  updateChannel(); // Initial update
-  scheduleNextDailyCheck(); // Daily alignment
+  startInterval();
 });
 
 client.login(process.env.TOKEN);
